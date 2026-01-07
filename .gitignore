@@ -103,4 +103,6 @@ test-dashboard/
 flake.lock
 /default.nix
 
+archive.sh
+*-compressed.zip
 # Before adding new lines, see the comment at the top.
