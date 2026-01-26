@@ -40,6 +40,11 @@ impl StreamEnvironment {
         }
     }
 
+    /// Create a builder for configuring the environment.
+    pub fn builder() -> StreamEnvBuilder {
+        StreamEnvBuilder::new()
+    }
+
     /// Create a socket source that reads lines from a TCP socket.
     pub fn socket_source(&self, host: &str, port: u16) -> DataStream<String> {
         let vertex_id = self.inner.next_vertex_id();
@@ -124,8 +129,8 @@ impl StreamEnvironment {
     }
 
     /// Set the default parallelism for all operators.
-    pub fn set_parallelism(&mut self, _parallelism: u32) -> &mut Self {
-        // Store this and apply to all vertices
+    pub fn set_parallelism(&mut self, parallelism: u32) -> &mut Self {
+        self.config.parallelism = parallelism;
         self
     }
 
@@ -138,7 +143,17 @@ impl StreamEnvironment {
     /// Build the job graph.
     pub fn build_graph(&self, name: &str) -> JobGraph {
         let mut graph = JobGraph::new(name);
-        graph.vertices = self.inner.get_vertices();
+
+        // Get vertices and apply default parallelism to those that haven't been explicitly set
+        let mut vertices = self.inner.get_vertices();
+        for vertex in &mut vertices {
+            if vertex.parallelism == 1 && self.config.parallelism > 1 {
+                // Apply default parallelism if vertex is using the default (1)
+                vertex.parallelism = self.config.parallelism;
+            }
+        }
+
+        graph.vertices = vertices;
         graph.edges = self.inner.get_edges();
         graph.config = self.config.clone();
         graph
@@ -189,6 +204,12 @@ impl StreamEnvBuilder {
     /// Set the checkpoint interval.
     pub fn checkpoint_interval(mut self, interval_ms: u64) -> Self {
         self.config.checkpoint_interval_ms = interval_ms;
+        self
+    }
+
+    /// Set the default parallelism for all operators.
+    pub fn parallelism(mut self, parallelism: u32) -> Self {
+        self.config.parallelism = parallelism;
         self
     }
 

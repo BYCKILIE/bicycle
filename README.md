@@ -385,6 +385,7 @@ description: "Counts words from socket input"
 
 config:
   parallelism: 1
+  max_parallelism: 8       # Max parallelism for rescaling (default: parallelism * 4)
   checkpoint_interval_ms: 60000
 
 vertices:
@@ -927,12 +928,17 @@ impl AsyncFunction for WordSplitter {
     }
 }
 
-// Build a streaming pipeline
+// Build a streaming pipeline with configuration
 fn main() -> Result<()> {
-    let env = StreamEnvironment::new();
+    let env = StreamEnvironment::builder()
+        .parallelism(2)              // Default parallelism for all operators
+        .max_parallelism(16)         // Max parallelism for rescaling
+        .checkpoint_interval(30_000) // Checkpoint every 30 seconds
+        .build();
 
     env.socket_source("0.0.0.0", 9999)
         .process(WordSplitter)
+        .set_parallelism(4)  // Override: this operator runs with parallelism 4
         .key_by(|word| word.clone())
         .count()
         .socket_sink("0.0.0.0", 9998);
@@ -950,6 +956,13 @@ fn main() -> Result<()> {
 - **count** / **reduce** - Aggregations
 - **tumbling_window** / **sliding_window** / **session_window** - Windowing
 - **socket_sink** / **kafka_sink** / **print** - Output sinks
+- **set_parallelism** - Override parallelism for an operator
+- **set_max_parallelism** - Override max parallelism for an operator
+
+**Environment Configuration:**
+- **parallelism(n)** - Default parallelism for all operators
+- **max_parallelism(n)** - Maximum parallelism for rescaling
+- **checkpoint_interval(ms)** - Interval between checkpoints
 
 ### Native Plugin System
 
@@ -1184,6 +1197,24 @@ bind: "0.0.0.0:9001"
 slots: 4
 memory_mb: 4096
 state_path: "/var/bicycle/state"
+```
+
+### Job Configuration (YAML)
+
+| Property | Description | Default |
+|----------|-------------|---------|
+| `parallelism` | Default parallelism for all operators | `1` |
+| `max_parallelism` | Maximum parallelism for rescaling (must be >= parallelism) | `parallelism * 4` |
+| `checkpoint_interval_ms` | Interval between checkpoints | `60000` |
+| `max_restarts` | Maximum restart attempts on failure | `3` |
+| `restart_delay_ms` | Delay between restart attempts | `5000` |
+
+**Per-vertex parallelism** can also be set on individual operators:
+```yaml
+vertices:
+  - id: source
+    operator: source
+    parallelism: 2    # Override for this operator only
 ```
 
 ### Environment Variables

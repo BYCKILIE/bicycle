@@ -13,6 +13,7 @@ description: "Counts words from socket input and outputs counts to socket"
 
 config:
   parallelism: 1
+  max_parallelism: 8      # Max parallelism for rescaling (default: parallelism * 4)
   checkpoint_interval_ms: 60000
   max_restarts: 3
   restart_delay_ms: 5000

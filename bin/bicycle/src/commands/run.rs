@@ -27,6 +27,10 @@ pub struct JobDefinition {
 pub struct JobConfigDef {
     #[serde(default = "default_parallelism")]
     pub parallelism: i32,
+    /// Maximum parallelism for rescaling. If not set, defaults to parallelism * 4.
+    /// This determines the maximum number of key groups for state partitioning.
+    #[serde(default)]
+    pub max_parallelism: Option<i32>,
     #[serde(default = "default_checkpoint_interval")]
     pub checkpoint_interval_ms: i64,
     #[serde(default = "default_max_restarts")]
@@ -180,9 +184,15 @@ pub async fn execute(
     let job_name = name_override.unwrap_or_else(|| job_def.name.clone());
     let job_graph = to_job_graph(&job_def, parallelism_override);
 
+    // Calculate effective parallelism and max_parallelism
+    let effective_parallelism = parallelism_override.unwrap_or(job_def.config.parallelism);
+    let effective_max_parallelism = job_def.config.max_parallelism
+        .unwrap_or(effective_parallelism * 4)  // Default: 4x parallelism for rescaling headroom
+        .max(effective_parallelism);  // max_parallelism must be >= parallelism
+
     let config = JobConfig {
         checkpoint_interval_ms: job_def.config.checkpoint_interval_ms,
-        max_parallelism: parallelism_override.unwrap_or(job_def.config.parallelism) * 2,
+        max_parallelism: effective_max_parallelism,
         restart_strategy: Some(RestartStrategy {
             r#type: RestartStrategyType::RestartStrategyFixedDelay as i32,
             max_attempts: job_def.config.max_restarts,

@@ -277,6 +277,12 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DataStream<T> {
         self
     }
 
+    /// Set maximum parallelism for this operator (for rescaling).
+    pub fn set_max_parallelism(self, max_parallelism: u32) -> Self {
+        self.env.set_max_parallelism(&self.vertex_id, max_parallelism);
+        self
+    }
+
     /// Get the vertex ID.
     pub fn vertex_id(&self) -> &str {
         &self.vertex_id
@@ -515,6 +521,13 @@ impl StreamEnvInner {
         let mut vertices = self.vertices.lock().unwrap();
         if let Some(v) = vertices.iter_mut().find(|v| v.id == vertex_id) {
             v.parallelism = parallelism;
+        }
+    }
+
+    pub fn set_max_parallelism(&self, vertex_id: &str, max_parallelism: u32) {
+        let mut vertices = self.vertices.lock().unwrap();
+        if let Some(v) = vertices.iter_mut().find(|v| v.id == vertex_id) {
+            v.max_parallelism = Some(max_parallelism);
         }
     }
 

@@ -83,7 +83,10 @@ pub struct Vertex {
     pub operator_type: OperatorType,
     /// Parallelism (number of parallel instances).
     pub parallelism: u32,
-    /// WASM function name (if using custom WASM function).
+    /// Maximum parallelism for this operator (for rescaling).
+    /// If None, uses the job-level max_parallelism.
+    pub max_parallelism: Option<u32>,
+    /// Plugin function name (if using native plugin).
     pub plugin_function: Option<String>,
     /// Serialized operator configuration.
     pub config: Vec<u8>,
@@ -97,6 +100,7 @@ impl Vertex {
             name: name.into(),
             operator_type,
             parallelism: 1,
+            max_parallelism: None,
             plugin_function: None,
             config: Vec::new(),
         }
@@ -108,7 +112,13 @@ impl Vertex {
         self
     }
 
-    /// Set WASM function name.
+    /// Set maximum parallelism for rescaling.
+    pub fn with_max_parallelism(mut self, max_parallelism: u32) -> Self {
+        self.max_parallelism = Some(max_parallelism);
+        self
+    }
+
+    /// Set plugin function name.
     pub fn with_plugin_function(mut self, name: impl Into<String>) -> Self {
         self.plugin_function = Some(name.into());
         self
@@ -268,10 +278,12 @@ pub enum PartitionStrategy {
 /// Job configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobConfig {
+    /// Default parallelism for operators (can be overridden per-operator).
+    pub parallelism: u32,
+    /// Maximum parallelism for rescaling (determines key group count).
+    pub max_parallelism: u32,
     /// Checkpoint interval in milliseconds.
     pub checkpoint_interval_ms: u64,
-    /// Maximum parallelism.
-    pub max_parallelism: u32,
     /// Restart strategy.
     pub restart_strategy: RestartStrategy,
     /// Additional properties.
@@ -281,6 +293,7 @@ pub struct JobConfig {
 impl Default for JobConfig {
     fn default() -> Self {
         Self {
+            parallelism: 1,
             checkpoint_interval_ms: 60000,
             max_parallelism: 128,
             restart_strategy: RestartStrategy::default(),
