@@ -100,7 +100,7 @@ pub struct TaskDescriptor {
     pub operator_name: ::prost::alloc::string::String,
     #[prost(enumeration = "OperatorType", tag = "2")]
     pub operator_type: i32,
-    /// Serialized operator configuration
+    /// Serialized operator configuration (JSON)
     #[prost(bytes = "vec", tag = "3")]
     pub operator_config: ::prost::alloc::vec::Vec<u8>,
     #[prost(int32, tag = "4")]
@@ -111,6 +111,23 @@ pub struct TaskDescriptor {
     pub input_gates: ::prost::alloc::vec::Vec<InputGate>,
     #[prost(message, repeated, tag = "7")]
     pub output_gates: ::prost::alloc::vec::Vec<OutputGate>,
+    /// For sources/sinks: connector configuration
+    #[prost(message, optional, tag = "8")]
+    pub connector_config: ::core::option::Option<ConnectorConfig>,
+    /// Plugin module bytes (distributed from JobManager)
+    /// For native plugins: .so/.dylib/.dll shared library
+    /// For WASM: .wasm module
+    #[prost(bytes = "vec", tag = "9")]
+    pub plugin_module: ::prost::alloc::vec::Vec<u8>,
+    /// Plugin function name to execute (type name for native, export name for WASM)
+    #[prost(string, tag = "10")]
+    pub plugin_function: ::prost::alloc::string::String,
+    /// Whether this is a rich function (stateful, with checkpointing support)
+    #[prost(bool, tag = "11")]
+    pub is_rich_function: bool,
+    /// Plugin type: "native" for .so dynamic libraries, "wasm" for WebAssembly
+    #[prost(string, tag = "12")]
+    pub plugin_type: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -216,6 +233,16 @@ pub struct SubmitJobRequest {
     pub job_graph: ::core::option::Option<JobGraph>,
     #[prost(message, optional, tag = "3")]
     pub config: ::core::option::Option<JobConfig>,
+    /// Plugin module bytes (optional)
+    /// For native plugins: contains .so/.dylib/.dll shared library bytes
+    /// For WASM: contains .wasm module bytes
+    /// If provided, the module is distributed to workers for execution
+    #[prost(bytes = "vec", tag = "4")]
+    pub plugin_module: ::prost::alloc::vec::Vec<u8>,
+    /// Plugin type: "native" for .so dynamic libraries, "wasm" for WebAssembly
+    /// Default is empty (no plugin - uses built-in operators only)
+    #[prost(string, tag = "5")]
+    pub plugin_type: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -234,10 +261,34 @@ pub struct JobVertex {
     pub name: ::prost::alloc::string::String,
     #[prost(enumeration = "OperatorType", tag = "3")]
     pub operator_type: i32,
+    /// JSON-encoded operator configuration
     #[prost(bytes = "vec", tag = "4")]
     pub operator_config: ::prost::alloc::vec::Vec<u8>,
     #[prost(int32, tag = "5")]
     pub parallelism: i32,
+    /// For sources/sinks: connector configuration
+    #[prost(message, optional, tag = "6")]
+    pub connector_config: ::core::option::Option<ConnectorConfig>,
+    /// Plugin function name (type name for native plugins, export name for WASM)
+    /// Used by Process operators to identify which function to invoke
+    #[prost(string, tag = "7")]
+    pub plugin_function: ::prost::alloc::string::String,
+    /// Whether this is a rich function (stateful, with checkpointing)
+    #[prost(bool, tag = "8")]
+    pub is_rich_function: bool,
+}
+/// Connector configuration for sources and sinks
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConnectorConfig {
+    #[prost(enumeration = "ConnectorType", tag = "1")]
+    pub connector_type: i32,
+    /// Connector-specific properties
+    #[prost(map = "string, string", tag = "2")]
+    pub properties: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -550,6 +601,10 @@ pub enum OperatorType {
     Window = 6,
     Join = 7,
     Sink = 8,
+    Reduce = 9,
+    Count = 10,
+    /// Process operator using WASM function (like Flink's ProcessFunction)
+    Process = 11,
 }
 impl OperatorType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -567,6 +622,9 @@ impl OperatorType {
             OperatorType::Window => "OPERATOR_TYPE_WINDOW",
             OperatorType::Join => "OPERATOR_TYPE_JOIN",
             OperatorType::Sink => "OPERATOR_TYPE_SINK",
+            OperatorType::Reduce => "OPERATOR_TYPE_REDUCE",
+            OperatorType::Count => "OPERATOR_TYPE_COUNT",
+            OperatorType::Process => "OPERATOR_TYPE_PROCESS",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -581,6 +639,9 @@ impl OperatorType {
             "OPERATOR_TYPE_WINDOW" => Some(Self::Window),
             "OPERATOR_TYPE_JOIN" => Some(Self::Join),
             "OPERATOR_TYPE_SINK" => Some(Self::Sink),
+            "OPERATOR_TYPE_REDUCE" => Some(Self::Reduce),
+            "OPERATOR_TYPE_COUNT" => Some(Self::Count),
+            "OPERATOR_TYPE_PROCESS" => Some(Self::Process),
             _ => None,
         }
     }
@@ -639,6 +700,42 @@ impl CheckpointType {
         match value {
             "CHECKPOINT_TYPE_CHECKPOINT" => Some(Self::Checkpoint),
             "CHECKPOINT_TYPE_SAVEPOINT" => Some(Self::Savepoint),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ConnectorType {
+    None = 0,
+    Socket = 1,
+    Kafka = 2,
+    File = 3,
+    /// Built-in data generator for testing
+    Generator = 4,
+}
+impl ConnectorType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            ConnectorType::None => "CONNECTOR_TYPE_NONE",
+            ConnectorType::Socket => "CONNECTOR_TYPE_SOCKET",
+            ConnectorType::Kafka => "CONNECTOR_TYPE_KAFKA",
+            ConnectorType::File => "CONNECTOR_TYPE_FILE",
+            ConnectorType::Generator => "CONNECTOR_TYPE_GENERATOR",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONNECTOR_TYPE_NONE" => Some(Self::None),
+            "CONNECTOR_TYPE_SOCKET" => Some(Self::Socket),
+            "CONNECTOR_TYPE_KAFKA" => Some(Self::Kafka),
+            "CONNECTOR_TYPE_FILE" => Some(Self::File),
+            "CONNECTOR_TYPE_GENERATOR" => Some(Self::Generator),
             _ => None,
         }
     }

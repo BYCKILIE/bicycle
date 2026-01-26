@@ -9,11 +9,18 @@ members = [
   "crates/checkpoint",
   "crates/protocol",
   "crates/connectors",
+  "crates/api",
+  "crates/api-macros",
+  "crates/plugin",
   "bin/mini-runner",
   "bin/jobmanager",
   "bin/worker",
   "bin/webui",
-  "bin/demo-client",
+  "bin/bicycle",
+  "bin/socket-test",
+  "bin/wordcount-socket",
+  "test-jobs/wordcount",
+  "jobs/wordcount-plugin",
 ]
 
 [workspace.package]
@@ -51,3 +58,4 @@ rdkafka = { version = "0.36", features = ["cmake-build", "ssl"] }
 # pulsar = "6.3"  # Optional: uncomment when needed
 hostname = "0.4"
 protobuf-src = "1"
+libloading = "0.8"

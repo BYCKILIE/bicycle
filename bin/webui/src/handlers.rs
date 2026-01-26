@@ -175,6 +175,8 @@ pub async fn submit_job(
         job_name: req.name.clone(),
         job_graph: None, // Would be populated from job definition
         config: None,
+        plugin_module: Vec::new(),
+        plugin_type: String::new(),
     };
 
     match client.submit_job(proto_req).await {

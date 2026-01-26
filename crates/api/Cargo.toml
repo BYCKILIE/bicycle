@@ -1,0 +1,20 @@
+[package]
+name = "bicycle-api"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "User-facing API for Bicycle streaming jobs (similar to flink-streaming-java)"
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Proc macro for bicycle_main
+bicycle-api-macros = { path = "../api-macros", optional = true }
+
+[features]
+default = ["macros"]
+macros = ["bicycle-api-macros"]

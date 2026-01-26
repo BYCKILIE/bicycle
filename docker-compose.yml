@@ -37,6 +37,8 @@ services:
     ports:
       - "9001:9001"   # Control plane
       - "9101:9101"   # Data plane
+      - "9999:9999"   # Socket job input (if job lands on worker-1)
+      - "9998:9998"   # Socket job output (if job lands on worker-1)
     environment:
       - RUST_LOG=info,bicycle=debug
     command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--data-bind", "0.0.0.0:9101", "--slots", "4", "--memory-mb", "2048"]
@@ -56,6 +58,8 @@ services:
     ports:
       - "9002:9001"   # Control plane
       - "9102:9101"   # Data plane
+      - "19999:9999"  # Socket job input (if job lands on worker-2)
+      - "19998:9998"  # Socket job output (if job lands on worker-2)
     environment:
       - RUST_LOG=info,bicycle=debug
     command: ["bin/worker", "--jobmanager", "jobmanager:9000", "--bind", "0.0.0.0:9001", "--data-bind", "0.0.0.0:9101", "--slots", "4", "--memory-mb", "2048"]
@@ -67,24 +71,72 @@ services:
       - jobmanager
 
   # ==========================================================================
-  # Demo Client (submits jobs to the cluster)
+  # CLI (interactive command-line interface)
   # ==========================================================================
-  demo:
+  cli:
     build:
       context: .
-      target: demo
-    container_name: bicycle-demo
-    command: ["bin/demo-client", "--jobmanager", "jobmanager:9000", "demo", "--duration", "60"]
+      target: cli
+    container_name: bicycle-cli
     environment:
-      - RUST_LOG=info,demo_client=debug
+      - RUST_LOG=warn
+      - BICYCLE_JOBMANAGER=jobmanager:9000
+    volumes:
+      - ./jobs:/opt/bicycle/jobs:ro
     networks:
       - bicycle-net
     depends_on:
-      - jobmanager
-      - worker-1
-      - worker-2
+      jobmanager:
+        condition: service_healthy
     profiles:
-      - demo
+      - cli
+    # Usage: docker compose --profile cli run cli <command>
+    # Examples:
+    #   docker compose --profile cli run cli status
+    #   docker compose --profile cli run cli jobs
+    #   docker compose --profile cli run cli run jobs/wordcount.yaml
+    #   docker compose --profile cli run cli list
+
+  # ==========================================================================
+  # Socket Test (for testing socket connectors)
+  # ==========================================================================
+  socket-test:
+    build:
+      context: .
+      target: socket-test
+    container_name: bicycle-socket-test
+    ports:
+      - "9998:9998"
+      - "9999:9999"
+    environment:
+      - RUST_LOG=info
+    networks:
+      - bicycle-net
+    profiles:
+      - test
+    # Usage: docker-compose --profile test run socket-test echo
+    command: ["echo", "--source-port", "9999", "--sink-port", "9998"]
+
+  # ==========================================================================
+  # Standalone Jobs (custom Rust streaming jobs)
+  # ==========================================================================
+  wordcount:
+    image: bicycle-wordcount
+    container_name: bicycle-wordcount
+    hostname: wordcount
+    ports:
+      - "7999:9999"   # Job input port
+      - "7998:9998"   # Job output port
+    environment:
+      - RUST_LOG=info
+    command: ["--source-port", "9999", "--sink-port", "9998"]
+    networks:
+      - bicycle-net
+    profiles:
+      - jobs
+    # Usage: docker compose --profile jobs up wordcount
+    # Then:  nc localhost 7999 (send input)
+    #        nc localhost 7998 (receive output)
 
   # ==========================================================================
   # Web UI

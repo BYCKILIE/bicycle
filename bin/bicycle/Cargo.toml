@@ -1,11 +1,12 @@
 [package]
-name = "demo-client"
+name = "bicycle"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
+description = "Bicycle CLI - Command-line interface for the Bicycle streaming engine"
 
 [[bin]]
-name = "demo-client"
+name = "bicycle"
 path = "src/main.rs"
 
 [dependencies]
@@ -15,4 +16,8 @@ tokio.workspace = true
 tonic.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+uuid = { version = "1", features = ["v4"] }

@@ -1,0 +1,65 @@
+# Word Count Job with Custom Rust Functions
+#
+# This job uses registered custom functions instead of built-in operators:
+# - WordSplitter: Splits lines into words (AsyncFunction)
+# - WordCounter: Counts word occurrences (RichAsyncFunction)
+#
+# Usage:
+#   bicycle run jobs/wordcount-custom.yaml
+#
+# Connect:
+#   nc localhost 9999  # Send input text
+#   nc localhost 9998  # Receive word counts (format: word:count)
+
+name: wordcount-custom
+description: "Word count using custom Rust AsyncFunction implementations"
+
+config:
+  parallelism: 1
+  checkpoint_interval_ms: 60000
+  max_restarts: 3
+  restart_delay_ms: 5000
+
+vertices:
+  - id: source
+    name: "Socket Source"
+    operator: source
+    parallelism: 1
+    connector:
+      type: socket
+      properties:
+        host: "0.0.0.0"
+        port: "9999"
+
+  - id: splitter
+    name: "WordSplitter"
+    operator: process
+    parallelism: 1
+
+  - id: counter
+    name: "WordCounter"
+    operator: process
+    parallelism: 1
+
+  - id: sink
+    name: "Socket Sink"
+    operator: sink
+    parallelism: 1
+    connector:
+      type: socket
+      properties:
+        host: "0.0.0.0"
+        port: "9998"
+
+edges:
+  - from: source
+    to: splitter
+    partition: forward
+
+  - from: splitter
+    to: counter
+    partition: forward
+
+  - from: counter
+    to: sink
+    partition: forward

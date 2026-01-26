@@ -6,11 +6,13 @@
 //! ## Available Connectors
 //!
 //! - **Kafka** (enabled by default): Apache Kafka source and sink with exactly-once support
+//! - **Socket** (enabled by default): TCP socket source and sink for testing
 //! - **Pulsar** (optional): Apache Pulsar source and sink
 //!
 //! ## Feature Flags
 //!
 //! - `kafka`: Enable Kafka connector (default)
+//! - `socket`: Enable Socket connector for testing (default)
 //! - `pulsar`: Enable Pulsar connector
 //!
 //! ## Example
@@ -28,6 +30,9 @@
 
 #[cfg(feature = "kafka")]
 pub mod kafka;
+
+#[cfg(feature = "socket")]
+pub mod socket;
 
 #[cfg(feature = "pulsar")]
 pub mod pulsar;

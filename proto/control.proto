@@ -115,11 +115,22 @@ message DeployTaskRequest {
 message TaskDescriptor {
     string operator_name = 1;
     OperatorType operator_type = 2;
-    bytes operator_config = 3;  // Serialized operator configuration
+    bytes operator_config = 3;  // Serialized operator configuration (JSON)
     int32 parallelism = 4;
     int32 subtask_index = 5;
     repeated InputGate input_gates = 6;
     repeated OutputGate output_gates = 7;
+    ConnectorConfig connector_config = 8;  // For sources/sinks: connector configuration
+    // Plugin module bytes (distributed from JobManager)
+    // For native plugins: .so/.dylib/.dll shared library
+    // For WASM: .wasm module
+    bytes plugin_module = 9;
+    // Plugin function name to execute (type name for native, export name for WASM)
+    string plugin_function = 10;
+    // Whether this is a rich function (stateful, with checkpointing support)
+    bool is_rich_function = 11;
+    // Plugin type: "native" for .so dynamic libraries, "wasm" for WebAssembly
+    string plugin_type = 12;
 }
 
 enum OperatorType {
@@ -132,6 +143,10 @@ enum OperatorType {
     OPERATOR_TYPE_WINDOW = 6;
     OPERATOR_TYPE_JOIN = 7;
     OPERATOR_TYPE_SINK = 8;
+    OPERATOR_TYPE_REDUCE = 9;
+    OPERATOR_TYPE_COUNT = 10;
+    // Process operator using WASM function (like Flink's ProcessFunction)
+    OPERATOR_TYPE_PROCESS = 11;
 }
 
 message InputGate {
@@ -215,6 +230,14 @@ message SubmitJobRequest {
     string job_name = 1;
     JobGraph job_graph = 2;
     JobConfig config = 3;
+    // Plugin module bytes (optional)
+    // For native plugins: contains .so/.dylib/.dll shared library bytes
+    // For WASM: contains .wasm module bytes
+    // If provided, the module is distributed to workers for execution
+    bytes plugin_module = 4;
+    // Plugin type: "native" for .so dynamic libraries, "wasm" for WebAssembly
+    // Default is empty (no plugin - uses built-in operators only)
+    string plugin_type = 5;
 }
 
 message JobGraph {
@@ -226,8 +249,29 @@ message JobVertex {
     string vertex_id = 1;
     string name = 2;
     OperatorType operator_type = 3;
-    bytes operator_config = 4;
+    bytes operator_config = 4;  // JSON-encoded operator configuration
     int32 parallelism = 5;
+    // For sources/sinks: connector configuration
+    ConnectorConfig connector_config = 6;
+    // Plugin function name (type name for native plugins, export name for WASM)
+    // Used by Process operators to identify which function to invoke
+    string plugin_function = 7;
+    // Whether this is a rich function (stateful, with checkpointing)
+    bool is_rich_function = 8;
+}
+
+// Connector configuration for sources and sinks
+message ConnectorConfig {
+    ConnectorType connector_type = 1;
+    map<string, string> properties = 2;  // Connector-specific properties
+}
+
+enum ConnectorType {
+    CONNECTOR_TYPE_NONE = 0;
+    CONNECTOR_TYPE_SOCKET = 1;
+    CONNECTOR_TYPE_KAFKA = 2;
+    CONNECTOR_TYPE_FILE = 3;
+    CONNECTOR_TYPE_GENERATOR = 4;  // Built-in data generator for testing
 }
 
 message JobEdge {

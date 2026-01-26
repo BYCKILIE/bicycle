@@ -21,6 +21,7 @@ use tonic::transport::{Channel, Server};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+mod plugin_loader;
 mod service;
 mod task_executor;
 

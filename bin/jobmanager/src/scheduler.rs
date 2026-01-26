@@ -223,6 +223,11 @@ impl Scheduler {
             subtask_index: task.subtask_index,
             input_gates,
             output_gates,
+            connector_config: task.connector_config.clone(),
+            plugin_module: task.plugin_module.clone(),
+            plugin_function: task.plugin_function.clone(),
+            is_rich_function: task.is_rich_function,
+            plugin_type: task.plugin_type.clone(),
         };
 
         Some(DeployTaskRequest {

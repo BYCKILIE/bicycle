@@ -1,0 +1,55 @@
+# Echo Job
+# Pipeline: SocketSource -> Map(uppercase) -> SocketSink
+#
+# Usage:
+#   bicycle run jobs/echo.yaml
+#
+# Connect:
+#   nc localhost 9999  # Send input text
+#   nc localhost 9998  # Receive uppercase output
+
+name: echo
+description: "Echoes input to output with uppercase transformation"
+
+config:
+  parallelism: 1
+  checkpoint_interval_ms: 60000
+  max_restarts: 3
+  restart_delay_ms: 5000
+
+vertices:
+  - id: source
+    name: "Socket Source"
+    operator: source
+    parallelism: 1
+    connector:
+      type: socket
+      properties:
+        host: "0.0.0.0"
+        port: "9999"
+
+  - id: map
+    name: "Uppercase"
+    operator: map
+    parallelism: 1
+    config:
+      function: uppercase
+
+  - id: sink
+    name: "Socket Sink"
+    operator: sink
+    parallelism: 1
+    connector:
+      type: socket
+      properties:
+        host: "0.0.0.0"
+        port: "9998"
+
+edges:
+  - from: source
+    to: map
+    partition: forward
+
+  - from: map
+    to: sink
+    partition: forward

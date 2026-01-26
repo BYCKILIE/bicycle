@@ -5,8 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["kafka"]
+default = ["kafka", "socket"]
 kafka = ["rdkafka"]
+socket = []  # Socket connectors for testing/development
 pulsar = []  # Placeholder - needs pulsar crate when enabled
 
 [dependencies]

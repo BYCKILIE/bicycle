@@ -6,6 +6,18 @@ Bicycle provides exactly-once stream processing semantics with a clean, idiomati
 
 ## Features
 
+### Streaming API
+- **Fluent DataStream API**: Build pipelines with a Flink-like fluent interface
+- **User-defined functions**: `AsyncFunction` (stateless) and `RichAsyncFunction` (stateful)
+- **Type-safe pipelines**: Compile-time type checking for streaming operations
+- **Keyed streams**: Key-based partitioning for aggregations and stateful processing
+
+### Native Plugin System
+- **Native performance**: Compile jobs as shared libraries (.so/.dylib/.dll)
+- **Dynamic loading**: Workers load plugins at runtime via `libloading`
+- **Stateful plugins**: Support for checkpointed state in plugins
+- **Simple macro**: `bicycle_plugin!` generates all FFI exports automatically
+
 ### Core Capabilities
 - **Streaming operators**: Map, Filter, FlatMap, KeyBy, Reduce
 - **Window operations**: Tumbling, Sliding, Session windows
@@ -17,7 +29,7 @@ Bicycle provides exactly-once stream processing semantics with a clean, idiomati
 
 ### Distributed Coordination
 - **JobManager**: Full control plane with gRPC API for job submission, scheduling, and monitoring
-- **Worker nodes**: Task executors with heartbeat-based health monitoring
+- **Worker nodes**: Task executors with heartbeat-based health monitoring and plugin loading
 - **Task scheduling**: Slot-based allocation with locality-aware placement
 - **Cluster monitoring**: Real-time metrics, worker status, and job tracking
 
@@ -28,13 +40,15 @@ Bicycle provides exactly-once stream processing semantics with a clean, idiomati
 
 ### Connectors
 - **Apache Kafka**: Source and sink with exactly-once transactional support
+- **Socket (TCP)**: Test connectors for development and debugging
 - **Apache Pulsar**: Source and sink with sequence-based deduplication (placeholder)
 
 ### Web UI & CLI
 - **Dashboard**: Real-time cluster overview with job and worker status
 - **Job management**: Submit, monitor, and cancel jobs via REST API
 - **Metrics**: Records processed, throughput, checkpoints, and resource usage
-- **Demo client**: CLI tool for cluster interaction and job submission
+- **Bicycle CLI**: Full-featured command-line interface for cluster management
+- **Plugin deployment**: Submit jobs with native plugins or Docker images
 
 ---
 
@@ -46,11 +60,21 @@ Bicycle provides exactly-once stream processing semantics with a clean, idiomati
 # Start the full cluster (JobManager + 2 Workers + Web UI)
 docker compose up -d
 
+# Wait for cluster to be ready, then check status
+docker compose --profile cli run --rm cli status
+
+# List available jobs
+docker compose --profile cli run --rm cli jobs
+
+# Submit the wordcount job
+docker compose --profile cli run --rm cli run jobs/wordcount.yaml
+
+# Connect to the job (in separate terminals)
+nc localhost 9998    # Terminal 1: Receive output
+nc localhost 9999    # Terminal 2: Send input (type "hello world")
+
 # Open the Web UI
 open http://localhost:8081
-
-# Run the interactive demo
-docker compose --profile demo up demo
 
 # View logs
 docker compose logs -f
@@ -147,9 +171,529 @@ INFO  Demo complete
 
 ---
 
+## Bicycle CLI
+
+The `bicycle` command-line tool is the primary interface for interacting with a Bicycle cluster.
+
+### Commands
+
+```bash
+bicycle [--jobmanager <ADDR>] <COMMAND>
+
+Commands:
+  run        Submit a job from a YAML definition file
+  submit     Submit a Docker-based or native executable job
+  deploy     Deploy a standalone Docker-based job
+  jobs       List available job definitions
+  list       List all running/completed jobs
+  info       Get detailed information about a job
+  cancel     Cancel a running job
+  savepoint  Trigger a savepoint for a job
+  status     Show cluster status overview
+  workers    List all workers in the cluster
+  metrics    Show cluster and job metrics
+```
+
+### Examples
+
+```bash
+# Check cluster status
+./target/release/bicycle status
+
+# List available job definitions
+./target/release/bicycle jobs
+
+# Submit a job from a YAML file
+./target/release/bicycle run jobs/wordcount.yaml
+
+# Submit with overrides
+./target/release/bicycle run jobs/wordcount.yaml --name my-wordcount -p 4
+
+# Submit with a native plugin
+./target/release/bicycle submit my-job --plugin target/release/libwordcount_plugin.so
+
+# Submit a Docker-based job
+./target/release/bicycle submit my-job --docker --image my-job:latest
+
+# Deploy a standalone Docker job
+./target/release/bicycle deploy my-job:latest --source-port 9999 --sink-port 9998
+
+# List all running jobs
+./target/release/bicycle list
+
+# List only running jobs (as JSON)
+./target/release/bicycle list --state running --format json
+
+# Get job details
+./target/release/bicycle info <job-id>
+
+# Cancel a job (with savepoint)
+./target/release/bicycle cancel <job-id>
+
+# Force cancel (no savepoint)
+./target/release/bicycle cancel <job-id> --force
+
+# Trigger savepoint
+./target/release/bicycle savepoint <job-id> --target-dir /tmp/savepoints
+
+# View metrics
+./target/release/bicycle metrics
+```
+
+### Docker Usage
+
+```bash
+# List available jobs
+docker compose --profile cli run --rm cli jobs
+
+# Submit a job
+docker compose --profile cli run --rm cli run jobs/wordcount.yaml
+
+# Check cluster status
+docker compose --profile cli run --rm cli status
+
+# List running jobs
+docker compose --profile cli run --rm cli list
+
+# List workers
+docker compose --profile cli run --rm cli workers --format json
+```
+
+---
+
+## Testing Socket Connectors
+
+Bicycle includes TCP socket connectors for testing and development. The `socket-test` utility helps you verify these connectors work correctly.
+
+### Socket Test Commands
+
+```bash
+socket-test <COMMAND>
+
+Commands:
+  source    Run a socket source server that prints received lines
+  sink      Run a socket sink server that accepts connections
+  echo      Run an echo pipeline: source -> transform -> sink
+  generate  Generate test data and send to a sink
+  loopback  Run a simple loopback test (source and sink on same process)
+```
+
+### Quick Loopback Test
+
+The fastest way to verify socket connectors work:
+
+```bash
+# Build and run loopback test
+cargo build --release --bin socket-test
+./target/release/socket-test loopback --count 5
+```
+
+Expected output:
+```
+Loopback test:
+  Source port: 9999
+  Sink port:   9998
+  Messages:    5
+  [1] test-message-0
+  [2] test-message-1
+  [3] test-message-2
+  [4] test-message-3
+  [5] test-message-4
+Loopback test passed: 5 messages
+```
+
+### Interactive Echo Pipeline
+
+Test with netcat to see data flow through the pipeline:
+
+```bash
+# Terminal 1: Start the echo pipeline
+./target/release/socket-test echo --source-port 9999 --sink-port 9998
+
+# Terminal 2: Connect to receive output
+nc localhost 9998
+
+# Terminal 3: Send input
+nc localhost 9999
+# Type messages and see them appear in Terminal 2
+```
+
+With transformation:
+```bash
+# Echo with uppercase transformation
+./target/release/socket-test echo --transform upper
+
+# Available transforms: none, upper, lower, reverse
+```
+
+### Source Server (receive data)
+
+```bash
+# Start a source that prints received lines
+./target/release/socket-test source --port 9999
+
+# In another terminal, send data
+echo "hello world" | nc localhost 9999
+```
+
+### Sink Server (send data)
+
+```bash
+# Start a sink that broadcasts to connected clients
+./target/release/socket-test sink --port 9998
+
+# In another terminal, receive data
+nc localhost 9998
+
+# Type messages in the sink terminal to send to all clients
+```
+
+### Generate Test Data
+
+```bash
+# Generate 100 messages at 100ms intervals
+./target/release/socket-test generate --host localhost --port 9998 --count 100 --interval 100
+
+# Generate infinite messages (Ctrl+C to stop)
+./target/release/socket-test generate --count 0 --interval 1000 --prefix "event"
+```
+
+### Docker Usage
+
+```bash
+# Run echo pipeline in Docker
+docker compose --profile test run socket-test echo
+
+# Run loopback test
+docker compose --profile test run socket-test loopback --count 10
+```
+
+---
+
+## Submitting Jobs to the Cluster
+
+Bicycle follows a Flink-like architecture where jobs are submitted to the JobManager and executed on Workers. Jobs are defined as YAML files in the `jobs/` directory.
+
+### Job Definition Files
+
+Jobs are defined in YAML files that describe the pipeline:
+
+```yaml
+# jobs/wordcount.yaml
+name: wordcount
+description: "Counts words from socket input"
+
+config:
+  parallelism: 1
+  checkpoint_interval_ms: 60000
+
+vertices:
+  - id: source
+    name: "Socket Source"
+    operator: source
+    connector:
+      type: socket
+      properties:
+        port: "9999"
+
+  - id: flatmap
+    name: "Split Words"
+    operator: flatmap
+    config:
+      function: split_words
+
+  - id: count
+    name: "Word Count"
+    operator: count
+
+  - id: sink
+    name: "Socket Sink"
+    operator: sink
+    connector:
+      type: socket
+      properties:
+        port: "9998"
+
+edges:
+  - from: source
+    to: flatmap
+  - from: flatmap
+    to: count
+  - from: count
+    to: sink
+```
+
+**With Custom Plugin Functions:**
+```yaml
+# jobs/wordcount-custom.yaml
+name: wordcount-custom
+description: "Word count using custom Rust AsyncFunction implementations"
+
+config:
+  parallelism: 1
+  checkpoint_interval_ms: 60000
+
+vertices:
+  - id: source
+    name: "Socket Source"
+    operator: source
+    connector:
+      type: socket
+      properties:
+        host: "0.0.0.0"
+        port: "9999"
+
+  - id: splitter
+    name: "WordSplitter"
+    operator: process       # Uses plugin function
+
+  - id: counter
+    name: "WordCounter"
+    operator: process       # Uses plugin function
+
+  - id: sink
+    name: "Socket Sink"
+    operator: sink
+    connector:
+      type: socket
+      properties:
+        host: "0.0.0.0"
+        port: "9998"
+
+edges:
+  - from: source
+    to: splitter
+  - from: splitter
+    to: counter
+  - from: counter
+    to: sink
+```
+
+### Submitting Jobs
+
+```bash
+# 1. Start the cluster
+docker compose up -d
+
+# 2. List available jobs
+docker compose --profile cli run --rm cli jobs
+
+# 3. Submit the wordcount job
+docker compose --profile cli run --rm cli run jobs/wordcount.yaml
+
+# Output:
+# Submitting job 'wordcount' from jobs/wordcount.yaml...
+# Pipeline: Socket Source -> Split Words -> Word Count -> Socket Sink
+# Job submitted successfully!
+#   Job ID: abc123...
+
+# 4. Connect to the job (worker-1 exposes ports 9999 and 9998)
+# Terminal 2: Receive word counts
+nc localhost 9998
+
+# Terminal 3: Send text input
+nc localhost 9999
+hello world
+hello bicycle
+```
+
+**Output format:**
+```
+hello:1
+world:1
+hello:2
+bicycle:1
+```
+
+### Job Architecture
+
+Jobs are defined as a DAG of operators:
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Source    │ ──▶ │  FlatMap    │ ──▶ │   Count     │ ──▶ │    Sink     │
+│  (Socket)   │     │(split_words)│     │ (by word)   │     │  (Socket)   │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+```
+
+**Available Operators:**
+- **Source**: Read from connectors (Socket, Kafka, Generator)
+- **Map**: Transform each element (uppercase, lowercase, word_count, reverse)
+- **FlatMap**: Transform to zero or more elements (split_words, split_lines, split_csv)
+- **Filter**: Keep elements matching predicates (non_empty, contains, starts_with)
+- **KeyBy**: Partition by key
+- **Window**: Group into time windows
+- **Count**: Count elements by key
+- **Reduce**: Aggregate elements
+- **Sink**: Write to connectors (Socket, Kafka, Console)
+
+**Available Connectors:**
+- **Socket**: TCP socket source/sink for testing
+- **Kafka**: Production-grade Kafka source/sink
+- **Generator**: Built-in data generator for testing
+- **Console**: Print to stdout (sink only)
+
+### Local Development (Standalone)
+
+For quick local testing without the cluster:
+
+```bash
+# Build the standalone word count binary
+cargo build --release --bin wordcount-socket
+
+# Run locally (not on cluster)
+./target/release/wordcount-socket --source-port 9999 --sink-port 9998
+
+# Connect with netcat as above
+```
+
+---
+
+## Building Native Plugins
+
+Native plugins allow you to write streaming jobs in Rust and compile them to shared libraries that workers load dynamically.
+
+### Plugin Project Structure
+
+```
+jobs/my-plugin/
+├── Cargo.toml
+└── src/
+    └── lib.rs
+```
+
+**Cargo.toml:**
+```toml
+[package]
+name = "my-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]  # Build as shared library
+
+[dependencies]
+bicycle-api = { path = "../../crates/api" }
+bicycle-plugin = { path = "../../crates/plugin" }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+```
+
+**src/lib.rs:**
+```rust
+use bicycle_api::prelude::*;
+use bicycle_plugin::bicycle_plugin;
+
+/// A stateless function that converts text to uppercase.
+#[derive(Default)]
+pub struct ToUppercase;
+
+#[async_trait]
+impl AsyncFunction for ToUppercase {
+    type In = String;
+    type Out = String;
+
+    async fn process(&mut self, input: String, _ctx: &Context) -> Vec<String> {
+        vec![input.to_uppercase()]
+    }
+
+    fn name(&self) -> &str {
+        "ToUppercase"
+    }
+}
+
+/// A stateless function that splits lines into words.
+#[derive(Default)]
+pub struct WordSplitter;
+
+#[async_trait]
+impl AsyncFunction for WordSplitter {
+    type In = String;
+    type Out = String;
+
+    async fn process(&mut self, input: String, _ctx: &Context) -> Vec<String> {
+        input.split_whitespace()
+            .map(|w| w.to_lowercase())
+            .filter(|w| !w.is_empty())
+            .collect()
+    }
+
+    fn name(&self) -> &str {
+        "WordSplitter"
+    }
+}
+
+// Export all functions
+bicycle_plugin!(ToUppercase, WordSplitter);
+```
+
+### Build and Deploy
+
+```bash
+# Build the plugin
+cargo build --release -p my-plugin
+
+# The shared library is at:
+# Linux:   target/release/libmy_plugin.so
+# macOS:   target/release/libmy_plugin.dylib
+# Windows: target/release/my_plugin.dll
+
+# Submit to cluster with plugin
+./target/release/bicycle submit my-job --plugin target/release/libmy_plugin.so
+
+# Or reference in job YAML
+./target/release/bicycle run jobs/my-job.yaml
+```
+
+### Stateful Plugins
+
+For functions that need to maintain state across elements:
+
+```rust
+use bicycle_api::prelude::*;
+use bicycle_plugin::bicycle_plugin_rich;
+use std::collections::HashMap;
+
+#[derive(Default)]
+pub struct WordCounter {
+    counts: HashMap<String, u64>,
+}
+
+#[async_trait]
+impl RichAsyncFunction for WordCounter {
+    type In = String;
+    type Out = String;
+
+    async fn open(&mut self, _ctx: &RuntimeContext) -> Result<()> {
+        // Initialize or restore state
+        Ok(())
+    }
+
+    async fn process(&mut self, word: String, _ctx: &RuntimeContext) -> Vec<String> {
+        let count = self.counts.entry(word.clone()).or_insert(0);
+        *count += 1;
+        vec![format!("{}:{}", word, count)]
+    }
+
+    async fn snapshot(&self, _ctx: &RuntimeContext) -> Result<()> {
+        // Save state for checkpointing
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "WordCounter"
+    }
+}
+
+// Export stateful functions with bicycle_plugin_rich!
+bicycle_plugin_rich!(WordCounter);
+```
+
+---
+
 ## Demo Tutorial
 
-This tutorial walks you through running a complete Bicycle cluster and submitting jobs.
+This tutorial walks you through running a complete Bicycle cluster.
 
 ### Step 1: Start the Cluster
 
@@ -178,89 +722,32 @@ Navigate to http://localhost:8081 in your browser. You'll see:
 - **Workers Table**: List of registered workers with status
 - **Jobs Table**: Running and completed jobs
 
-### Step 3: Run the Demo Client
-
-The demo client submits a sample job and monitors the cluster:
-
-```bash
-# Run the full demo (submits a job and monitors for 60 seconds)
-docker compose --profile demo up demo
-```
-
-Output:
-```
-=== Bicycle Cluster Demo ===
-
-1. Checking cluster status...
-
-=== Cluster Status ===
-Workers:         2/2 active
-Slots:           8/8 available
-Running Jobs:    0
-Total Tasks:     0
-Uptime:          5s
-
-2. Listing workers...
-
-=== Workers (2) ===
-ID                                       Hostname        Slots      Status
---------------------------------------------------------------------------------
-abc12345-...                             worker-1        0/4        Active
-def67890-...                             worker-2        0/4        Active
-
-3. Submitting demo job...
-
-Job ID: 568ef8e1-fe2b-4791-8568-72876a5a3a01
-Message: Job submitted with 7 tasks
-
-4. Monitoring job for 60s...
-
-[  6s] Job 568ef8e1 - State: Running, Tasks: 7, Records: in=0 out=0
-[ 12s] Job 568ef8e1 - State: Running, Tasks: 7, Records: in=0 out=0
-...
-
-5. Final cluster status...
-
-=== Cluster Metrics ===
-Uptime:              65s
-Records Processed:   0
-Bytes Processed:     0
-Checkpoints OK:      0
-```
-
-### Step 4: Use the Demo Client CLI
-
-The demo client provides several commands:
+### Step 3: Use the Bicycle CLI
 
 ```bash
 # Check cluster status
-docker compose exec jobmanager /opt/bicycle/bin/demo-client \
-    --jobmanager localhost:9000 status
+docker compose --profile cli run --rm cli status
 
 # List workers
-docker compose exec jobmanager /opt/bicycle/bin/demo-client \
-    --jobmanager localhost:9000 workers
+docker compose --profile cli run --rm cli workers
 
-# List jobs
-docker compose exec jobmanager /opt/bicycle/bin/demo-client \
-    --jobmanager localhost:9000 jobs
+# List available job definitions
+docker compose --profile cli run --rm cli jobs
 
-# Submit a custom job
-docker compose exec jobmanager /opt/bicycle/bin/demo-client \
-    --jobmanager localhost:9000 submit \
-    --name my-wordcount \
-    --parallelism 4
+# Submit a job
+docker compose --profile cli run --rm cli run jobs/wordcount.yaml
+
+# List running jobs
+docker compose --profile cli run --rm cli list
 
 # Get job details
-docker compose exec jobmanager /opt/bicycle/bin/demo-client \
-    --jobmanager localhost:9000 job <job-id>
+docker compose --profile cli run --rm cli info <job-id>
 
 # View metrics
-docker compose exec jobmanager /opt/bicycle/bin/demo-client \
-    --jobmanager localhost:9000 metrics
+docker compose --profile cli run --rm cli metrics
 ```
 
-### Step 5: Use the REST API
+### Step 4: Use the REST API
 
 ```bash
 # Get cluster info
@@ -281,7 +768,7 @@ curl -X POST http://localhost:8081/api/jobs \
     -d '{"name": "my-job", "parallelism": 2}'
 ```
 
-### Step 6: Clean Up
+### Step 5: Clean Up
 
 ```bash
 docker compose down -v  # -v removes volumes
@@ -315,17 +802,23 @@ cargo run -p bicycle-webui -- --bind 0.0.0.0:8081 --jobmanager 127.0.0.1:9000
 
 Then open http://localhost:8081 in your browser.
 
-### Use the Demo Client
+### Use the Bicycle CLI
 
 ```bash
-# Build the demo client
-cargo build --release -p demo-client
+# Build the CLI
+cargo build --release -p bicycle
 
 # Check status
-./target/release/demo-client --jobmanager 127.0.0.1:9000 status
+./target/release/bicycle --jobmanager 127.0.0.1:9000 status
 
-# Submit a job
-./target/release/demo-client --jobmanager 127.0.0.1:9000 submit --name test-job
+# List available job definitions
+./target/release/bicycle jobs
+
+# Submit a job from YAML file
+./target/release/bicycle --jobmanager 127.0.0.1:9000 run jobs/wordcount.yaml
+
+# List running jobs
+./target/release/bicycle list
 ```
 
 ---
@@ -380,13 +873,25 @@ bicycle/
 │   ├── checkpoint/     # Checkpoint coordination and barrier tracking
 │   ├── network/        # TCP data plane, serialization, flow control
 │   ├── protocol/       # gRPC generated code from protobuf definitions
-│   └── connectors/     # External system connectors (Kafka, Pulsar)
+│   ├── connectors/     # External system connectors (Kafka, Socket)
+│   ├── api/            # User-facing DataStream API (like Flink's API)
+│   ├── api-macros/     # Procedural macros for the API
+│   └── plugin/         # Native plugin support (.so/.dylib/.dll)
 ├── bin/
 │   ├── mini-runner/    # Local demo pipeline (standalone)
 │   ├── jobmanager/     # Control plane server (gRPC)
-│   ├── worker/         # Task executor with heartbeat
+│   ├── worker/         # Task executor with heartbeat and plugin loading
 │   ├── webui/          # Web dashboard and REST API
-│   └── demo-client/    # CLI for cluster interaction
+│   ├── bicycle/        # CLI for cluster management
+│   ├── socket-test/    # Socket connector test utility
+│   └── wordcount-socket/ # Standalone wordcount (local testing, no cluster)
+├── jobs/               # Job definition files (YAML)
+│   ├── wordcount.yaml  # Word count streaming job
+│   ├── wordcount-custom.yaml # Word count with custom Rust functions
+│   ├── wordcount-plugin/ # Example native plugin project
+│   └── echo.yaml       # Echo/uppercase job
+├── test-jobs/          # Test job implementations
+│   └── wordcount/      # Standalone wordcount binary
 ├── proto/              # gRPC service definitions
 │   ├── control.proto   # Control plane RPC (job/task/cluster management)
 │   └── data.proto      # Data plane messages
@@ -399,7 +904,137 @@ bicycle/
 
 ## Usage Examples
 
-### Operators
+### Streaming API (Recommended)
+
+The `bicycle-api` crate provides a fluent DataStream API similar to Apache Flink:
+
+```rust
+use bicycle_api::prelude::*;
+
+// Define a custom function
+#[derive(Default)]
+struct WordSplitter;
+
+#[async_trait]
+impl AsyncFunction for WordSplitter {
+    type In = String;
+    type Out = String;
+
+    async fn process(&mut self, input: String, _ctx: &Context) -> Vec<String> {
+        input.split_whitespace()
+            .map(|w| w.to_lowercase())
+            .collect()
+    }
+}
+
+// Build a streaming pipeline
+fn main() -> Result<()> {
+    let env = StreamEnvironment::new();
+
+    env.socket_source("0.0.0.0", 9999)
+        .process(WordSplitter)
+        .key_by(|word| word.clone())
+        .count()
+        .socket_sink("0.0.0.0", 9998);
+
+    env.execute("wordcount")
+}
+```
+
+**Available DataStream Operations:**
+- **map** / **flat_map** / **filter** - Transform elements
+- **process** - Apply custom `AsyncFunction`
+- **process_rich** - Apply stateful `RichAsyncFunction`
+- **process_plugin** - Load function from native plugin
+- **key_by** - Partition by key for keyed operations
+- **count** / **reduce** - Aggregations
+- **tumbling_window** / **sliding_window** / **session_window** - Windowing
+- **socket_sink** / **kafka_sink** / **print** - Output sinks
+
+### Native Plugin System
+
+Build streaming jobs as native shared libraries for maximum performance:
+
+```rust
+// jobs/my-plugin/src/lib.rs
+use bicycle_api::prelude::*;
+use bicycle_plugin::bicycle_plugin;
+
+#[derive(Default)]
+pub struct ToUppercase;
+
+#[async_trait]
+impl AsyncFunction for ToUppercase {
+    type In = String;
+    type Out = String;
+
+    async fn process(&mut self, input: String, _ctx: &Context) -> Vec<String> {
+        vec![input.to_uppercase()]
+    }
+}
+
+// Export the function
+bicycle_plugin!(ToUppercase);
+```
+
+Build and deploy:
+```bash
+# Build the plugin as a shared library
+cargo build --release -p my-plugin
+# Result: target/release/libmy_plugin.so
+
+# Submit with the plugin
+bicycle submit my-job --plugin target/release/libmy_plugin.so
+```
+
+**Plugin Features:**
+- Full native performance (no interpretation overhead)
+- Access to system libraries and I/O
+- Stateful functions with `RichAsyncFunction` and `bicycle_plugin_rich!`
+- Automatic state checkpointing and recovery
+- Hot reloading support (planned)
+
+### Stateful Functions
+
+Use `RichAsyncFunction` for functions that maintain state:
+
+```rust
+use bicycle_api::prelude::*;
+use std::collections::HashMap;
+
+#[derive(Default)]
+struct WordCounter {
+    counts: HashMap<String, u64>,
+}
+
+#[async_trait]
+impl RichAsyncFunction for WordCounter {
+    type In = String;
+    type Out = String;
+
+    async fn open(&mut self, ctx: &RuntimeContext) -> Result<()> {
+        // Restore state from checkpoint if available
+        if let Some(state) = ctx.get_state("counts")? {
+            self.counts = state;
+        }
+        Ok(())
+    }
+
+    async fn process(&mut self, word: String, _ctx: &RuntimeContext) -> Vec<String> {
+        let count = self.counts.entry(word.clone()).or_insert(0);
+        *count += 1;
+        vec![format!("{}:{}", word, count)]
+    }
+
+    async fn snapshot(&self, ctx: &RuntimeContext) -> Result<()> {
+        ctx.save_state("counts", &self.counts)
+    }
+}
+```
+
+### Low-Level Operators
+
+For advanced use cases, you can use the runtime directly:
 
 ```rust
 use bicycle_operators::{MapOperator, FilterOperator, TumblingWindowSum};
@@ -424,6 +1059,28 @@ spawn_operator(
     rx2,
     tx3,
 );
+```
+
+### Socket Connectors
+
+```rust
+use bicycle_connectors::socket::{SocketTextSource, SocketTextSink, SocketConfig};
+use bicycle_runtime::Emitter;
+
+// Create a socket source listening on port 9999
+let config = SocketConfig::server(9999);
+let mut source = SocketTextSource::new(config);
+
+// Run the source with an emitter
+source.run(emitter).await?;
+
+// Create a socket sink listening on port 9998
+let sink = SocketTextSink::server(9998);
+sink.start().await?;
+
+// Write events as lines
+sink.write("hello world").await?;
+sink.write("foo bar").await?;
 ```
 
 ### State Management
@@ -611,6 +1268,9 @@ cargo test -p bicycle-state
 # Run with verbose logging
 RUST_LOG=bicycle=debug cargo run -p mini-runner
 
+# Test socket connectors
+cargo run -p socket-test -- loopback --count 10
+
 # Format code
 cargo fmt
 
@@ -667,10 +1327,10 @@ docker compose logs jobmanager
 docker compose exec worker-1 nc -z jobmanager 9000
 ```
 
-**Demo not running**
+**CLI not working**
 ```bash
 # Make sure to use the profile flag
-docker compose --profile demo up demo
+docker compose --profile cli run cli status
 ```
 
 ---
@@ -683,10 +1343,19 @@ docker compose --profile demo up demo
 - [x] Task scheduling with slot allocation
 - [x] Web UI dashboard
 - [x] Cluster monitoring and metrics
-- [x] Demo client CLI
+- [x] Bicycle CLI (replaced demo-client)
+- [x] Socket connectors for testing
 - [x] Task deployment from JobManager to Workers
 - [x] Operator execution on Workers (demo operators)
 - [x] Data plane communication setup (network layer)
+
+### Phase 1.5: Developer Experience ✅
+- [x] Fluent DataStream API (`bicycle-api` crate)
+- [x] User-defined functions (`AsyncFunction`, `RichAsyncFunction`)
+- [x] Native plugin system (`bicycle-plugin` crate)
+- [x] Plugin loading in workers (`libloading`)
+- [x] CLI support for plugin and Docker deployments
+- [x] Example plugin project (`jobs/wordcount-plugin`)
 
 ### Phase 2: Production Features
 - [ ] Checkpoint persistence and recovery
@@ -703,6 +1372,7 @@ docker compose --profile demo up demo
 - [ ] **Savepoint management UI**
 - [ ] **Job versioning** and rolling upgrades
 - [ ] **Multi-tenancy** with resource quotas
+- [ ] **Hot plugin reloading**
 
 ### Phase 4: Enterprise Features
 - [ ] High availability (HA) JobManager
@@ -715,11 +1385,10 @@ docker compose --profile demo up demo
 ### Contributing
 
 Contributions are welcome! Priority areas:
-1. Full data plane integration (connecting operators via network)
-2. Checkpoint persistence and job recovery
-3. Additional connectors (Kinesis, RabbitMQ, etc.)
-4. SQL support via DataFusion
-5. Documentation and examples
+1. Checkpoint persistence and job recovery
+2. Additional connectors (Kinesis, RabbitMQ, etc.)
+3. SQL support via DataFusion
+4. Documentation and examples
 
 ---
 
@@ -728,12 +1397,15 @@ Contributions are welcome! Priority areas:
 | Feature | Flink | Bicycle |
 |---------|-------|---------|
 | Language | Java/Scala | Rust |
+| DataStream API | Yes | Yes (fluent API) |
+| User-defined Functions | Yes | Yes (AsyncFunction, RichAsyncFunction) |
 | State Backend | RocksDB, Memory | RocksDB, Memory |
 | Checkpointing | Chandy-Lamport | Chandy-Lamport |
 | Event Time | Yes | Yes |
 | Exactly-Once | Yes | Yes |
 | Kafka Connector | Yes | Yes |
 | Web UI | Yes | Yes |
+| Native Plugins | No (JVM only) | Yes (.so/.dylib/.dll) |
 | SQL Support | Yes | Planned |
 | Memory Safety | JVM GC | Rust ownership |
 | Startup Time | Seconds | Milliseconds |

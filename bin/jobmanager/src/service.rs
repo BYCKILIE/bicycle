@@ -359,11 +359,27 @@ impl ControlPlane for ControlPlaneService {
         let graph = req.job_graph.ok_or_else(|| Status::invalid_argument("Job graph required"))?;
         let config = req.config.unwrap_or_default();
 
-        // Create job info
-        let job_info = JobInfo::new(job_id.clone(), req.job_name.clone(), graph.clone(), config.clone());
+        // Extract plugin info
+        let plugin_module = req.plugin_module;
+        let plugin_type = req.plugin_type;
+
+        // Create job info with plugin
+        let job_info = JobInfo::with_plugin(
+            job_id.clone(),
+            req.job_name.clone(),
+            graph.clone(),
+            config.clone(),
+            plugin_module.clone(),
+            plugin_type.clone(),
+        );
 
         // Create physical tasks
-        let physical_tasks = self.state.create_physical_tasks(&job_id, &graph);
+        let physical_tasks = self.state.create_physical_tasks(
+            &job_id,
+            &graph,
+            &plugin_module,
+            &plugin_type,
+        );
 
         if physical_tasks.is_empty() {
             return Err(Status::invalid_argument("Job graph has no vertices"));

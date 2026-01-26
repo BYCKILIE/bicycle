@@ -2,8 +2,8 @@
 
 use bicycle_core::{JobId, TaskId};
 use bicycle_protocol::control::{
-    JobConfig, JobEdge, JobGraph, JobState, JobVertex, OperatorType, PartitionStrategy, TaskState,
-    WorkerMetrics, WorkerResources,
+    ConnectorConfig, JobConfig, JobEdge, JobGraph, JobState, JobVertex, OperatorType,
+    PartitionStrategy, TaskState, WorkerMetrics, WorkerResources,
 };
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -118,6 +118,10 @@ pub struct JobInfo {
     pub bytes_out: i64,
     pub last_checkpoint_id: i64,
     pub last_checkpoint_time: i64,
+    /// Plugin module bytes (native .so or WASM)
+    pub plugin_module: Vec<u8>,
+    /// Plugin type: "native" or "wasm"
+    pub plugin_type: String,
 }
 
 impl JobInfo {
@@ -137,6 +141,37 @@ impl JobInfo {
             bytes_out: 0,
             last_checkpoint_id: 0,
             last_checkpoint_time: 0,
+            plugin_module: Vec::new(),
+            plugin_type: String::new(),
+        }
+    }
+
+    /// Create a new job with plugin information.
+    pub fn with_plugin(
+        job_id: String,
+        name: String,
+        graph: JobGraph,
+        config: JobConfig,
+        plugin_module: Vec<u8>,
+        plugin_type: String,
+    ) -> Self {
+        Self {
+            job_id,
+            name,
+            graph,
+            config,
+            state: JobState::Created,
+            start_time: Instant::now(),
+            end_time: None,
+            tasks: Vec::new(),
+            records_in: 0,
+            records_out: 0,
+            bytes_in: 0,
+            bytes_out: 0,
+            last_checkpoint_id: 0,
+            last_checkpoint_time: 0,
+            plugin_module,
+            plugin_type,
         }
     }
 }
@@ -152,8 +187,17 @@ pub struct PhysicalTask {
     pub operator_name: String,
     pub operator_type: OperatorType,
     pub operator_config: Vec<u8>,
+    pub connector_config: Option<ConnectorConfig>,
     pub upstream_tasks: Vec<(String, PartitionStrategy)>, // (task_id, partition)
     pub downstream_tasks: Vec<(String, PartitionStrategy)>,
+    /// Plugin module bytes (native .so or WASM)
+    pub plugin_module: Vec<u8>,
+    /// Plugin function name to execute
+    pub plugin_function: String,
+    /// Whether this is a rich (stateful) function
+    pub is_rich_function: bool,
+    /// Plugin type: "native" or "wasm"
+    pub plugin_type: String,
 }
 
 /// Global metrics for the cluster.
@@ -313,7 +357,13 @@ impl JobManagerState {
     }
 
     /// Create physical tasks from a job graph.
-    pub fn create_physical_tasks(&self, job_id: &str, graph: &JobGraph) -> Vec<PhysicalTask> {
+    pub fn create_physical_tasks(
+        &self,
+        job_id: &str,
+        graph: &JobGraph,
+        plugin_module: &[u8],
+        plugin_type: &str,
+    ) -> Vec<PhysicalTask> {
         let mut tasks = Vec::new();
 
         // Build vertex map for lookups
@@ -458,8 +508,13 @@ impl JobManagerState {
                     operator_type: OperatorType::try_from(vertex.operator_type)
                         .unwrap_or(OperatorType::Unknown),
                     operator_config: vertex.operator_config.clone(),
+                    connector_config: vertex.connector_config.clone(),
                     upstream_tasks,
                     downstream_tasks,
+                    plugin_module: plugin_module.to_vec(),
+                    plugin_function: vertex.plugin_function.clone(),
+                    is_rich_function: vertex.is_rich_function,
+                    plugin_type: plugin_type.to_string(),
                 });
             }
         }
