@@ -139,23 +139,39 @@ services:
     #        nc localhost 7998 (receive output)
 
   # ==========================================================================
-  # Web UI
+  # API Backend (Rust REST API that talks to JobManager via gRPC)
   # ==========================================================================
-  webui:
+  api:
     build:
       context: .
-      target: webui
-    container_name: bicycle-webui
-    hostname: webui
-    ports:
-      - "8081:8081"   # Web UI HTTP
+      target: runtime
+    container_name: bicycle-api
+    hostname: api
     environment:
       - RUST_LOG=info,bicycle=debug
-    command: ["bin/webui", "--bind", "0.0.0.0:8081", "--jobmanager", "jobmanager:9000"]
+    command: ["bin/webui", "--jobmanager", "jobmanager:9000"]
     networks:
       - bicycle-net
     depends_on:
       - jobmanager
+
+  # ==========================================================================
+  # Web UI (Next.js frontend)
+  # ==========================================================================
+  webui:
+    build:
+      context: .
+      target: webui-next
+    container_name: bicycle-webui
+    hostname: webui
+    ports:
+      - "3000:3000"   # Web UI
+    environment:
+      - NODE_ENV=production
+    networks:
+      - bicycle-net
+    depends_on:
+      - api
 
 # ==========================================================================
 # Networks

@@ -8,7 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tonic::transport::Channel;
-use tracing::{error, info};
+use tracing::error;
 
 use bicycle_protocol::control::{
     control_plane_client::ControlPlaneClient, CancelJobRequest, GetClusterInfoRequest,
@@ -108,6 +108,77 @@ pub struct SubmitJobResponse {
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
+}
+
+// ============================================================================
+// Job Graph types
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct JobGraphVertex {
+    pub id: String,
+    pub uid: String,
+    pub name: String,
+    pub operator_type: String,
+    pub parallelism: i32,
+    pub slot_sharing_group: String,
+    pub records_in: i64,
+    pub records_out: i64,
+    pub backpressure: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobGraphEdge {
+    pub source_id: String,
+    pub target_id: String,
+    pub partition_strategy: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobGraphResponse {
+    pub vertices: Vec<JobGraphVertex>,
+    pub edges: Vec<JobGraphEdge>,
+}
+
+// ============================================================================
+// Job Exceptions types
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct JobException {
+    pub timestamp: i64,
+    pub task_id: String,
+    pub operator_name: String,
+    pub message: String,
+    pub stack_trace: String,
+    pub root_cause: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobExceptionsResponse {
+    pub exceptions: Vec<JobException>,
+    pub truncated: bool,
+}
+
+// ============================================================================
+// Metrics History types
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct MetricsHistoryPoint {
+    pub timestamp: i64,
+    pub records_per_sec: f64,
+    pub bytes_per_sec: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MetricsHistoryResponse {
+    pub points: Vec<MetricsHistoryPoint>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MetricsHistoryQuery {
+    pub minutes: Option<i32>,
 }
 
 // ============================================================================
@@ -395,4 +466,173 @@ pub async fn health_check() -> Json<HealthResponse> {
         status: "healthy".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
+}
+
+/// Get job graph for visualization.
+pub async fn get_job_graph(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> Result<Json<JobGraphResponse>, StatusCode> {
+    let mut client = get_client(&state).await?;
+
+    let req = GetJobStatusRequest {
+        job_id: job_id.clone(),
+    };
+
+    match client.get_job_status(req).await {
+        Ok(response) => {
+            let resp = response.into_inner();
+
+            // Use the job graph from the response
+            let job_graph = resp.job_graph.unwrap_or_default();
+
+            // Build task metrics map for aggregating records per vertex
+            let mut vertex_records: std::collections::HashMap<String, (i64, i64)> =
+                std::collections::HashMap::new();
+
+            for task in &resp.task_statuses {
+                // Extract vertex_id from task_id (format: job_id-vertex_id-subtask_idx)
+                let parts: Vec<&str> = task.task_id.split('-').collect();
+                if parts.len() >= 2 {
+                    let vertex_id = parts[1].to_string();
+                    let entry = vertex_records.entry(vertex_id).or_insert((0, 0));
+                    entry.0 += task.records_processed;
+                    entry.1 += task.bytes_processed;
+                }
+            }
+
+            // Convert vertices from proto
+            let vertices: Vec<JobGraphVertex> = job_graph
+                .vertices
+                .iter()
+                .map(|v| {
+                    let operator_type_enum =
+                        bicycle_protocol::control::OperatorType::try_from(v.operator_type)
+                            .unwrap_or_default();
+                    let (records_in, _bytes) =
+                        vertex_records.get(&v.vertex_id).cloned().unwrap_or((0, 0));
+
+                    JobGraphVertex {
+                        id: v.vertex_id.clone(),
+                        uid: format!("{}-uid", v.vertex_id),
+                        name: v.name.clone(),
+                        operator_type: format!("{:?}", operator_type_enum),
+                        parallelism: v.parallelism,
+                        slot_sharing_group: "default".to_string(),
+                        records_in,
+                        records_out: records_in, // Approximation
+                        backpressure: 0.0,
+                    }
+                })
+                .collect();
+
+            // Convert edges from proto
+            let edges: Vec<JobGraphEdge> = job_graph
+                .edges
+                .iter()
+                .map(|e| {
+                    let partition_strategy_enum =
+                        bicycle_protocol::control::PartitionStrategy::try_from(e.partition_strategy)
+                            .unwrap_or_default();
+                    JobGraphEdge {
+                        source_id: e.source_vertex_id.clone(),
+                        target_id: e.target_vertex_id.clone(),
+                        partition_strategy: format!("{:?}", partition_strategy_enum),
+                    }
+                })
+                .collect();
+
+            Ok(Json(JobGraphResponse { vertices, edges }))
+        }
+        Err(e) => {
+            error!("Failed to get job graph: {}", e);
+            Err(StatusCode::NOT_FOUND)
+        }
+    }
+}
+
+/// Get job exceptions.
+pub async fn get_job_exceptions(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<String>,
+) -> Result<Json<JobExceptionsResponse>, StatusCode> {
+    let mut client = get_client(&state).await?;
+
+    let req = GetJobStatusRequest { job_id };
+
+    match client.get_job_status(req).await {
+        Ok(response) => {
+            let resp = response.into_inner();
+
+            // Extract exceptions from failed tasks
+            let exceptions: Vec<JobException> = resp
+                .task_statuses
+                .iter()
+                .filter(|t| {
+                    t.state() == bicycle_protocol::control::TaskState::Failed
+                        && !t.error_message.is_empty()
+                })
+                .map(|t| {
+                    let msg = &t.error_message;
+                    JobException {
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as i64,
+                        task_id: t.task_id.clone(),
+                        operator_name: t.task_id.split('-').nth(1).unwrap_or("unknown").to_string(),
+                        message: msg.clone(),
+                        stack_trace: msg.clone(), // In real impl, would have full stack trace
+                        root_cause: None,
+                    }
+                })
+                .collect();
+
+            Ok(Json(JobExceptionsResponse {
+                exceptions,
+                truncated: false,
+            }))
+        }
+        Err(e) => {
+            error!("Failed to get job exceptions: {}", e);
+            Err(StatusCode::NOT_FOUND)
+        }
+    }
+}
+
+/// Get metrics history for charts.
+pub async fn get_metrics_history(
+    State(_state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<MetricsHistoryQuery>,
+) -> Result<Json<MetricsHistoryResponse>, StatusCode> {
+    let minutes = query.minutes.unwrap_or(15);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    // Generate synthetic data points for demo
+    // In real implementation, would query from metrics store
+    let points: Vec<MetricsHistoryPoint> = (0..minutes)
+        .map(|i| {
+            let timestamp = now - ((minutes - i) as i64 * 60 * 1000);
+            MetricsHistoryPoint {
+                timestamp,
+                records_per_sec: 1000.0 + (i as f64 * 10.0) + (rand_simple() * 200.0),
+                bytes_per_sec: 50000.0 + (i as f64 * 500.0) + (rand_simple() * 10000.0),
+            }
+        })
+        .collect();
+
+    Ok(Json(MetricsHistoryResponse { points }))
+}
+
+// Simple pseudo-random for demo data
+fn rand_simple() -> f64 {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    (nanos % 1000) as f64 / 1000.0
 }

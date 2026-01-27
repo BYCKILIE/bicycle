@@ -14,9 +14,11 @@ use bicycle_network::{ChannelId, NetworkConfig, NetworkEnvironment};
 use bicycle_protocol::control::{ConnectorType, OperatorType, TaskDescriptor, TaskState};
 use bicycle_runtime::{stream_channel, Emitter};
 use dashmap::DashMap;
+use futures::FutureExt;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -269,8 +271,8 @@ impl TaskExecutor {
                 }
             }
 
-            // Execute the task based on operator type
-            let result = Self::run_task(
+            // Execute the task based on operator type, catching panics
+            let task_future = Self::run_task(
                 &task_id_clone,
                 &job_id_clone,
                 descriptor,
@@ -278,20 +280,34 @@ impl TaskExecutor {
                 internal_channels,
                 internal_receivers,
                 plugin_cache,
-            )
-            .await;
+            );
+
+            // Wrap in AssertUnwindSafe to catch panics
+            let result = AssertUnwindSafe(task_future).catch_unwind().await;
 
             match result {
-                Ok(()) => {
+                Ok(Ok(())) => {
                     let current_state = status_clone.get_state();
                     if !matches!(current_state, TaskState::Canceled | TaskState::Canceling) {
                         status_clone.set_state(TaskState::Finished);
                         info!(task_id = %task_id_clone, "Task finished successfully");
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     status_clone.set_error(e.to_string());
                     error!(task_id = %task_id_clone, error = %e, "Task failed");
+                }
+                Err(panic_info) => {
+                    // Extract panic message
+                    let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic".to_string()
+                    };
+                    status_clone.set_error(format!("Task panicked: {}", panic_msg));
+                    error!(task_id = %task_id_clone, panic = %panic_msg, "Task panicked");
                 }
             }
         });

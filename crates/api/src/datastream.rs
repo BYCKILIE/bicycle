@@ -224,7 +224,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DataStream<T> {
     }
 
     /// Write to a socket sink.
-    pub fn socket_sink(self, host: &str, port: u16) {
+    pub fn socket_sink(self, host: &str, port: u16) -> SinkStream {
         let new_id = self.env.next_vertex_id();
         let vertex = Vertex::new(
             &new_id,
@@ -236,10 +236,11 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DataStream<T> {
 
         self.env.add_vertex(vertex);
         self.env.add_edge(Edge::new(&self.vertex_id, &new_id));
+        SinkStream::new(self.env, new_id)
     }
 
     /// Write to a Kafka topic.
-    pub fn kafka_sink(self, brokers: &str, topic: &str) {
+    pub fn kafka_sink(self, brokers: &str, topic: &str) -> SinkStream {
         let new_id = self.env.next_vertex_id();
         let vertex = Vertex::new(
             &new_id,
@@ -251,10 +252,11 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DataStream<T> {
 
         self.env.add_vertex(vertex);
         self.env.add_edge(Edge::new(&self.vertex_id, &new_id));
+        SinkStream::new(self.env, new_id)
     }
 
     /// Write to stdout (for debugging).
-    pub fn print(self) {
+    pub fn print(self) -> SinkStream {
         let new_id = self.env.next_vertex_id();
         let vertex = Vertex::new(
             &new_id,
@@ -269,6 +271,7 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DataStream<T> {
 
         self.env.add_vertex(vertex);
         self.env.add_edge(Edge::new(&self.vertex_id, &new_id));
+        SinkStream::new(self.env, new_id)
     }
 
     /// Set parallelism for this operator.
@@ -280,6 +283,70 @@ impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> DataStream<T> {
     /// Set maximum parallelism for this operator (for rescaling).
     pub fn set_max_parallelism(self, max_parallelism: u32) -> Self {
         self.env.set_max_parallelism(&self.vertex_id, max_parallelism);
+        self
+    }
+
+    /// Set a user-defined unique identifier for this operator.
+    ///
+    /// The UID is used to identify operator state during savepoint/checkpoint recovery.
+    /// It should be stable across job restarts to enable state migration.
+    ///
+    /// # Example
+    /// ```ignore
+    /// stream.process(MyFunction)
+    ///     .uid("my-processor-v1")
+    ///     .name("My Processor");
+    /// ```
+    pub fn uid(self, uid: impl Into<String>) -> Self {
+        self.env.set_uid(&self.vertex_id, &uid.into());
+        self
+    }
+
+    /// Set a human-readable name for this operator (shown in UI).
+    pub fn name(self, name: impl Into<String>) -> Self {
+        self.env.set_name(&self.vertex_id, &name.into());
+        self
+    }
+
+    /// Set the slot sharing group for this operator.
+    ///
+    /// Operators in the same slot sharing group can share task slots.
+    /// Use different groups to isolate resource-intensive operators.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // These operators share slots (default group)
+    /// stream.map(|x| x).slot_sharing_group("default");
+    ///
+    /// // This operator gets its own slots
+    /// stream.process(HeavyFunction).slot_sharing_group("heavy");
+    /// ```
+    pub fn slot_sharing_group(self, group: impl Into<String>) -> Self {
+        self.env.set_slot_sharing_group(&self.vertex_id, &group.into());
+        self
+    }
+
+    /// Disable operator chaining for this operator.
+    ///
+    /// By default, operators with the same parallelism and forward partitioning
+    /// are chained together into a single task. Call this to force a task boundary.
+    ///
+    /// # Example
+    /// ```ignore
+    /// stream.map(|x| x)
+    ///     .disable_chaining()  // Force new task here
+    ///     .filter(|x| x > 0);
+    /// ```
+    pub fn disable_chaining(self) -> Self {
+        self.env.disable_chaining(&self.vertex_id);
+        self
+    }
+
+    /// Start a new operator chain from this operator.
+    ///
+    /// This is equivalent to calling `disable_chaining()` on the previous operator.
+    pub fn start_new_chain(self) -> Self {
+        self.env.disable_chaining(&self.vertex_id);
         self
     }
 
@@ -531,11 +598,90 @@ impl StreamEnvInner {
         }
     }
 
+    pub fn set_uid(&self, vertex_id: &str, uid: &str) {
+        let mut vertices = self.vertices.lock().unwrap();
+        if let Some(v) = vertices.iter_mut().find(|v| v.id == vertex_id) {
+            v.uid = Some(uid.to_string());
+        }
+    }
+
+    pub fn set_name(&self, vertex_id: &str, name: &str) {
+        let mut vertices = self.vertices.lock().unwrap();
+        if let Some(v) = vertices.iter_mut().find(|v| v.id == vertex_id) {
+            v.name = name.to_string();
+        }
+    }
+
+    pub fn set_slot_sharing_group(&self, vertex_id: &str, group: &str) {
+        let mut vertices = self.vertices.lock().unwrap();
+        if let Some(v) = vertices.iter_mut().find(|v| v.id == vertex_id) {
+            v.slot_sharing_group = group.to_string();
+        }
+    }
+
+    pub fn disable_chaining(&self, vertex_id: &str) {
+        let mut vertices = self.vertices.lock().unwrap();
+        if let Some(v) = vertices.iter_mut().find(|v| v.id == vertex_id) {
+            v.chaining_enabled = false;
+        }
+    }
+
     pub fn get_vertices(&self) -> Vec<Vertex> {
         self.vertices.lock().unwrap().clone()
     }
 
     pub fn get_edges(&self) -> Vec<Edge> {
         self.edges.lock().unwrap().clone()
+    }
+}
+
+/// A sink stream (terminal operator).
+///
+/// This type allows setting properties on sink operators (uid, name, etc.)
+/// but does not allow further transformations.
+pub struct SinkStream {
+    env: Arc<StreamEnvInner>,
+    vertex_id: String,
+}
+
+impl SinkStream {
+    pub(crate) fn new(env: Arc<StreamEnvInner>, vertex_id: String) -> Self {
+        Self { env, vertex_id }
+    }
+
+    /// Set a user-defined unique identifier for this sink.
+    pub fn uid(self, uid: impl Into<String>) -> Self {
+        self.env.set_uid(&self.vertex_id, &uid.into());
+        self
+    }
+
+    /// Set a human-readable name for this sink (shown in UI).
+    pub fn name(self, name: impl Into<String>) -> Self {
+        self.env.set_name(&self.vertex_id, &name.into());
+        self
+    }
+
+    /// Set parallelism for this sink.
+    pub fn set_parallelism(self, parallelism: u32) -> Self {
+        self.env.set_parallelism(&self.vertex_id, parallelism);
+        self
+    }
+
+    /// Set maximum parallelism for this sink.
+    pub fn set_max_parallelism(self, max_parallelism: u32) -> Self {
+        self.env.set_max_parallelism(&self.vertex_id, max_parallelism);
+        self
+    }
+
+    /// Set the slot sharing group for this sink.
+    pub fn slot_sharing_group(self, group: impl Into<String>) -> Self {
+        self.env.set_slot_sharing_group(&self.vertex_id, &group.into());
+        self
+    }
+
+    /// Disable operator chaining for this sink.
+    pub fn disable_chaining(self) -> Self {
+        self.env.disable_chaining(&self.vertex_id);
+        self
     }
 }

@@ -494,8 +494,8 @@ impl ControlPlane for ControlPlaneService {
         Ok(Response::new(GetJobStatusResponse {
             job_id: job.job_id.clone(),
             state: job.state as i32,
-            start_time: job.start_time.elapsed().as_millis() as i64,
-            end_time: job.end_time.map(|t| t.elapsed().as_millis() as i64).unwrap_or(0),
+            start_time: job.start_time_unix,
+            end_time: job.end_time_unix.unwrap_or(0),
             task_statuses,
             metrics: Some(JobMetrics {
                 records_in: job.records_in,
@@ -505,6 +505,8 @@ impl ControlPlane for ControlPlaneService {
                 last_checkpoint_id: job.last_checkpoint_id,
                 last_checkpoint_time: job.last_checkpoint_time,
             }),
+            job_graph: Some(job.graph.clone()),
+            job_name: job.name.clone(),
         }))
     }
 
@@ -550,7 +552,7 @@ impl ControlPlane for ControlPlaneService {
         // Update job state to canceled
         if let Some(mut job) = self.state.jobs.get_mut(&req.job_id) {
             job.state = JobState::Canceled;
-            job.end_time = Some(std::time::Instant::now());
+            job.set_end_time();
         }
 
         info!(job_id = %req.job_id, tasks_cancelled = cancelled.len(), "Job cancelled");
@@ -597,7 +599,7 @@ impl ControlPlane for ControlPlaneService {
                     job_id: job.job_id.clone(),
                     name: job.name.clone(),
                     state: job.state as i32,
-                    start_time: job.start_time.elapsed().as_millis() as i64,
+                    start_time: job.start_time_unix,
                     tasks_total: job.tasks.len() as i32,
                     tasks_running,
                 }

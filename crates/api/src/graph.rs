@@ -75,9 +75,12 @@ impl JobGraph {
 /// A vertex (operator) in the job graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Vertex {
-    /// Unique identifier.
+    /// Internal vertex identifier (auto-generated).
     pub id: String,
-    /// Display name.
+    /// User-defined unique identifier for state recovery.
+    /// This should be stable across job restarts to enable state migration.
+    pub uid: Option<String>,
+    /// Display name (shown in UI).
     pub name: String,
     /// Operator type.
     pub operator_type: OperatorType,
@@ -86,6 +89,11 @@ pub struct Vertex {
     /// Maximum parallelism for this operator (for rescaling).
     /// If None, uses the job-level max_parallelism.
     pub max_parallelism: Option<u32>,
+    /// Slot sharing group. Operators in the same group can share slots.
+    /// Default group is "default". Use different groups to isolate operators.
+    pub slot_sharing_group: String,
+    /// Whether this operator can be chained with upstream/downstream operators.
+    pub chaining_enabled: bool,
     /// Plugin function name (if using native plugin).
     pub plugin_function: Option<String>,
     /// Serialized operator configuration.
@@ -97,13 +105,28 @@ impl Vertex {
     pub fn new(id: impl Into<String>, name: impl Into<String>, operator_type: OperatorType) -> Self {
         Self {
             id: id.into(),
+            uid: None,
             name: name.into(),
             operator_type,
             parallelism: 1,
             max_parallelism: None,
+            slot_sharing_group: "default".to_string(),
+            chaining_enabled: true,
             plugin_function: None,
             config: Vec::new(),
         }
+    }
+
+    /// Set user-defined unique identifier for state recovery.
+    pub fn with_uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    /// Set display name.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 
     /// Set parallelism.
@@ -115,6 +138,18 @@ impl Vertex {
     /// Set maximum parallelism for rescaling.
     pub fn with_max_parallelism(mut self, max_parallelism: u32) -> Self {
         self.max_parallelism = Some(max_parallelism);
+        self
+    }
+
+    /// Set slot sharing group.
+    pub fn with_slot_sharing_group(mut self, group: impl Into<String>) -> Self {
+        self.slot_sharing_group = group.into();
+        self
+    }
+
+    /// Disable chaining for this operator.
+    pub fn with_chaining_disabled(mut self) -> Self {
+        self.chaining_enabled = false;
         self
     }
 

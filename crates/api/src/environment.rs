@@ -172,6 +172,17 @@ impl StreamEnvironment {
         Ok(graph)
     }
 
+    /// Execute the job with optimization.
+    ///
+    /// This builds the job graph, optimizes it (operator chaining, slot sharing),
+    /// and returns both the original graph and the optimization result.
+    pub fn execute_optimized(&self, name: &str) -> Result<(JobGraph, crate::optimizer::OptimizedJobGraph)> {
+        let graph = self.execute(name)?;
+        let optimizer = crate::optimizer::JobGraphOptimizer::new();
+        let optimized = optimizer.optimize(&graph);
+        Ok((graph, optimized))
+    }
+
     /// Execute the job and return the serialized graph.
     ///
     /// This is used by the WASM runtime to extract the job graph.

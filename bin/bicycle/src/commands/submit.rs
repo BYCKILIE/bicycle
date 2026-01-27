@@ -26,13 +26,24 @@ pub struct ApiJobGraph {
 #[derive(Debug, Deserialize)]
 pub struct ApiVertex {
     pub id: String,
+    #[serde(default)]
+    pub uid: Option<String>,
     pub name: String,
     pub operator_type: ApiOperatorType,
     pub parallelism: u32,
+    #[serde(default)]
+    pub max_parallelism: Option<u32>,
+    #[serde(default = "default_slot_sharing_group")]
+    pub slot_sharing_group: String,
+    #[serde(default = "default_chaining_enabled")]
+    pub chaining_enabled: bool,
     pub plugin_function: Option<String>,
     #[serde(default)]
     pub config: Vec<u8>,
 }
+
+fn default_slot_sharing_group() -> String { "default".to_string() }
+fn default_chaining_enabled() -> bool { true }
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -89,6 +100,8 @@ pub struct ApiEdge {
 
 #[derive(Debug, Deserialize, Default)]
 pub struct ApiJobConfig {
+    #[serde(default = "default_parallelism")]
+    pub parallelism: u32,
     #[serde(default = "default_checkpoint_interval")]
     pub checkpoint_interval_ms: u64,
     #[serde(default = "default_max_parallelism")]
@@ -98,6 +111,8 @@ pub struct ApiJobConfig {
     #[serde(default)]
     pub properties: HashMap<String, String>,
 }
+
+fn default_parallelism() -> u32 { 1 }
 
 #[derive(Debug, Deserialize)]
 pub struct ApiRestartStrategy {

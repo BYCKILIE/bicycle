@@ -1,6 +1,6 @@
-//! Web UI for Bicycle job management.
+//! REST API server for Bicycle.
 //!
-//! Provides a REST API and dashboard for:
+//! Provides a REST API for:
 //! - Viewing running jobs and their status
 //! - Submitting new jobs
 //! - Viewing checkpoints
@@ -17,11 +17,11 @@ mod handlers;
 #[derive(Debug, Parser)]
 #[command(name = "webui")]
 struct Args {
-    /// Address to bind the web server
-    #[arg(long, default_value = "0.0.0.0:8081")]
+    /// Address to bind the API server
+    #[arg(long, default_value = "0.0.0.0:8080")]
     bind: String,
 
-    /// JobManager address for API calls
+    /// JobManager address for gRPC calls
     #[arg(long, default_value = "127.0.0.1:9000")]
     jobmanager: String,
 }
@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    info!(bind = %args.bind, jobmanager = %args.jobmanager, "Starting Bicycle Web UI");
+    info!(bind = %args.bind, jobmanager = %args.jobmanager, "Starting Bicycle API server");
 
     api::run_server(&args.bind, &args.jobmanager).await
 }

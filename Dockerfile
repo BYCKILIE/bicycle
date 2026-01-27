@@ -170,13 +170,6 @@ FROM runtime AS worker
 EXPOSE 9001 9101
 CMD ["bin/worker", "--bind", "0.0.0.0:9001", "--data-bind", "0.0.0.0:9101"]
 
-# -----------------------------------------------------------------------------
-# Stage 5: Web UI
-# -----------------------------------------------------------------------------
-FROM runtime AS webui
-
-EXPOSE 8081
-CMD ["bin/webui", "--bind", "0.0.0.0:8081"]
 
 # -----------------------------------------------------------------------------
 # Stage 6: CLI
@@ -213,3 +206,61 @@ EXPOSE 9998 9999
 # The plugin binary outputs the job graph JSON
 # Use with: docker run bicycle-wordcount-plugin | bicycle submit --plugin lib/libwordcount_plugin.so
 ENTRYPOINT ["bin/wordcount-plugin"]
+
+# -----------------------------------------------------------------------------
+# Stage 10: Next.js Web UI Builder
+# -----------------------------------------------------------------------------
+FROM node:20-alpine AS webui-next-builder
+
+WORKDIR /app
+
+# Copy package files
+COPY bin/webui-next/package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY bin/webui-next/ ./
+
+# Set API URL for Docker environment (rewrite destination)
+ENV API_URL=http://api:8080
+
+# Build the Next.js app
+RUN npm run build
+
+# -----------------------------------------------------------------------------
+# Stage 10.5: Next.js Web UI - Create public dir if needed
+# -----------------------------------------------------------------------------
+FROM webui-next-builder AS webui-next-prep
+
+RUN mkdir -p /app/public && touch /app/public/.keep
+
+# -----------------------------------------------------------------------------
+# Stage 11: Next.js Web UI Runtime
+# -----------------------------------------------------------------------------
+FROM node:20-alpine AS webui-next
+
+WORKDIR /app
+
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Copy standalone build
+COPY --from=webui-next-builder /app/.next/standalone ./
+COPY --from=webui-next-builder /app/.next/static ./.next/static
+COPY --from=webui-next-prep /app/public ./public
+
+# Set permissions
+RUN chown -R nextjs:nodejs /app
+
+USER nextjs
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

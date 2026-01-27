@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Information about a registered worker.
 #[derive(Debug, Clone)]
@@ -110,7 +110,9 @@ pub struct JobInfo {
     pub config: JobConfig,
     pub state: JobState,
     pub start_time: Instant,
+    pub start_time_unix: i64,  // Unix timestamp in milliseconds
     pub end_time: Option<Instant>,
+    pub end_time_unix: Option<i64>,  // Unix timestamp in milliseconds
     pub tasks: Vec<String>, // Task IDs
     pub records_in: i64,
     pub records_out: i64,
@@ -125,6 +127,14 @@ pub struct JobInfo {
 }
 
 impl JobInfo {
+    /// Get current Unix timestamp in milliseconds.
+    fn now_unix_ms() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+    }
+
     pub fn new(job_id: String, name: String, graph: JobGraph, config: JobConfig) -> Self {
         Self {
             job_id,
@@ -133,7 +143,9 @@ impl JobInfo {
             config,
             state: JobState::Created,
             start_time: Instant::now(),
+            start_time_unix: Self::now_unix_ms(),
             end_time: None,
+            end_time_unix: None,
             tasks: Vec::new(),
             records_in: 0,
             records_out: 0,
@@ -162,7 +174,9 @@ impl JobInfo {
             config,
             state: JobState::Created,
             start_time: Instant::now(),
+            start_time_unix: Self::now_unix_ms(),
             end_time: None,
+            end_time_unix: None,
             tasks: Vec::new(),
             records_in: 0,
             records_out: 0,
@@ -173,6 +187,12 @@ impl JobInfo {
             plugin_module,
             plugin_type,
         }
+    }
+
+    /// Set the end time to now.
+    pub fn set_end_time(&mut self) {
+        self.end_time = Some(Instant::now());
+        self.end_time_unix = Some(Self::now_unix_ms());
     }
 }
 

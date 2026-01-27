@@ -21,25 +21,35 @@ use bicycle_api::prelude::*;
 fn main() {
     // Create the streaming environment with configuration
     let env = StreamEnvironment::builder()
-        .parallelism(2)         // Default parallelism for all operators
-        .max_parallelism(16)    // Max parallelism for rescaling
-        .checkpoint_interval(30_000)  // Checkpoint every 30 seconds
+        .parallelism(2)              // Default parallelism for all operators
+        .max_parallelism(16)         // Max parallelism for rescaling
+        .checkpoint_interval(30_000) // Checkpoint every 30 seconds
         .build();
 
-    // Build the word count pipeline
-    // Source: Read lines from socket on port 9999
-    // Process: Split into words using the WordSplitter plugin function
-    // Sink: Write results to socket on port 9998
+    // Build the word count pipeline with UIDs and names for state recovery
     env.socket_source("0.0.0.0", 9999)
-        .process_plugin::<String>("WordSplitter")  // Uses the plugin function
-        .set_parallelism(4)       // Override: this operator runs with parallelism 4
-        .set_max_parallelism(5)  // Max parallelism for this operator
-        .socket_sink("0.0.0.0", 9998);
+        .uid("source-v1")                    // Stable UID for state recovery
+        .name("Socket Input")                // Display name in UI
+        .process_plugin::<String>("WordSplitter")
+        .uid("splitter-v1")
+        .name("Word Splitter")
+        .set_parallelism(4)                  // Override parallelism for this operator
+        .set_max_parallelism(16)
+        .slot_sharing_group("processing")    // Separate slot group for heavy processing
+        .socket_sink("0.0.0.0", 9998)
+        .uid("sink-v1")
+        .name("Socket Output");
 
-    // Build and serialize the job graph
-    let graph = env.execute("wordcount-plugin").expect("Failed to build job graph");
+    // Build and optimize the job graph
+    let (graph, optimized) = env.execute_optimized("wordcount-plugin")
+        .expect("Failed to build job graph");
 
-    // Output as JSON (to stdout for the CLI to capture)
+    // Print optimization summary to stderr (so it doesn't interfere with JSON output)
+    eprintln!();
+    optimized.print_summary();
+    eprintln!();
+
+    // Output the original graph as JSON (to stdout for the CLI to capture)
     let json = serde_json::to_string_pretty(&graph).expect("Failed to serialize graph");
     println!("{}", json);
 }

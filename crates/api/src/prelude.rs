@@ -19,7 +19,7 @@ pub use crate::context::{Context, MemoryStateBackend, RuntimeContext, StateBacke
 pub use crate::state::{ListState, MapState, ValueState};
 
 // Stream types
-pub use crate::datastream::{DataStream, KeyedStream, WindowedStream};
+pub use crate::datastream::{DataStream, KeyedStream, SinkStream, WindowedStream};
 
 // Environment
 pub use crate::environment::{StreamEnvBuilder, StreamEnvironment};
@@ -28,6 +28,12 @@ pub use crate::environment::{StreamEnvBuilder, StreamEnvironment};
 pub use crate::graph::{
     ConnectorConfig, ConnectorType, Edge, JobConfig, JobGraph, OperatorType, PartitionStrategy,
     Vertex, WindowType,
+};
+
+// Optimizer types
+pub use crate::optimizer::{
+    ChainEdge, JobGraphOptimizer, OperatorChain, OptimizedJobGraph, OptimizerConfig,
+    OptimizationStats,
 };
 
 // Error and Result

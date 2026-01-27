@@ -11,6 +11,8 @@ Bicycle provides exactly-once stream processing semantics with a clean, idiomati
 - **User-defined functions**: `AsyncFunction` (stateless) and `RichAsyncFunction` (stateful)
 - **Type-safe pipelines**: Compile-time type checking for streaming operations
 - **Keyed streams**: Key-based partitioning for aggregations and stateful processing
+- **Operator UIDs**: Stable identifiers for state recovery across job restarts
+- **Graph optimization**: Automatic operator chaining and slot sharing
 
 ### Native Plugin System
 - **Native performance**: Compile jobs as shared libraries (.so/.dylib/.dll)
@@ -956,13 +958,70 @@ fn main() -> Result<()> {
 - **count** / **reduce** - Aggregations
 - **tumbling_window** / **sliding_window** / **session_window** - Windowing
 - **socket_sink** / **kafka_sink** / **print** - Output sinks
-- **set_parallelism** - Override parallelism for an operator
-- **set_max_parallelism** - Override max parallelism for an operator
+
+**Operator Configuration:**
+- **uid(id)** - Set stable identifier for state recovery across restarts
+- **name(name)** - Set display name (shown in UI)
+- **set_parallelism(n)** - Override parallelism for an operator
+- **set_max_parallelism(n)** - Override max parallelism for rescaling
+- **slot_sharing_group(name)** - Assign to slot sharing group
+- **disable_chaining()** - Force task boundary (prevent operator fusion)
 
 **Environment Configuration:**
 - **parallelism(n)** - Default parallelism for all operators
 - **max_parallelism(n)** - Maximum parallelism for rescaling
 - **checkpoint_interval(ms)** - Interval between checkpoints
+
+### Graph Optimization
+
+The job graph optimizer automatically fuses operators to reduce task overhead:
+
+```rust
+// Build and optimize the job graph
+let (graph, optimized) = env.execute_optimized("my-job")?;
+
+// Print optimization summary
+optimized.print_summary();
+// Output:
+// === Job Graph Optimization Summary ===
+// Job: my-job
+// Operators: 6 -> 2 chains
+// Tasks: 12 -> 4 (66.7% reduction)
+// Slot sharing groups: 1
+// Minimum slots needed: 2
+```
+
+**Operator Chaining Rules:**
+- Same parallelism
+- Forward partitioning (not hash/rebalance/broadcast)
+- Same slot sharing group
+- Chaining not disabled on either operator
+
+```rust
+// Operators with same parallelism are chained automatically
+env.socket_source("0.0.0.0", 9999)  // p=2
+    .map(|x| x.to_uppercase())      // p=2, chained with source
+    .filter(|x| !x.is_empty())      // p=2, chained
+    .key_by(|x| x.clone())          // Forces new chain (hash partitioning)
+    .count()
+    .socket_sink("0.0.0.0", 9998);
+
+// Force a chain break
+stream.map(|x| x)
+    .disable_chaining()  // Next operator starts new chain
+    .filter(|x| x > 0);
+```
+
+**Slot Sharing:**
+Operators in the same slot sharing group can share task slots:
+
+```rust
+// Default group - these can share slots
+stream.map(|x| x).slot_sharing_group("default");
+
+// Separate group - isolated slots for heavy processing
+stream.process(HeavyFunction).slot_sharing_group("heavy");
+```
 
 ### Native Plugin System
 

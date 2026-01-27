@@ -316,6 +316,8 @@ message GetJobStatusResponse {
     int64 end_time = 4;
     repeated TaskStatus task_statuses = 5;
     JobMetrics metrics = 6;
+    JobGraph job_graph = 7;  // The job's execution graph
+    string job_name = 8;     // Job name for display
 }
 
 enum JobState {

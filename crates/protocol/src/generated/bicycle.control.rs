@@ -356,6 +356,12 @@ pub struct GetJobStatusResponse {
     pub task_statuses: ::prost::alloc::vec::Vec<TaskStatus>,
     #[prost(message, optional, tag = "6")]
     pub metrics: ::core::option::Option<JobMetrics>,
+    /// The job's execution graph
+    #[prost(message, optional, tag = "7")]
+    pub job_graph: ::core::option::Option<JobGraph>,
+    /// Job name for display
+    #[prost(string, tag = "8")]
+    pub job_name: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

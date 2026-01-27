@@ -2414,6 +2414,7 @@ dependencies = [
  "bincode",
  "clap",
  "dashmap",
+ "futures",
  "hostname",
  "libloading",
  "parking_lot",

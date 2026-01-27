@@ -35,6 +35,7 @@ pub mod datastream;
 pub mod environment;
 pub mod function;
 pub mod graph;
+pub mod optimizer;
 pub mod prelude;
 pub mod state;
 
@@ -42,6 +43,7 @@ pub use context::{Context, RuntimeContext, TaskInfo};
 pub use datastream::DataStream;
 pub use environment::StreamEnvironment;
 pub use function::{AsyncFunction, RichAsyncFunction};
+pub use optimizer::{JobGraphOptimizer, OptimizedJobGraph, OperatorChain, OptimizerConfig};
 pub use state::{ListState, MapState, ValueState};
 
 // Re-export common dependencies
